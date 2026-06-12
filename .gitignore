@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+.env
+.env.local
+
+# Data artifacts (rebuilt by ETL — never commit)
+data/raw/
+data/parquet/
+data/*.duckdb
+data/*.png
+
+# Claude Code local overrides (secrets)
+.claude/settings.local.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

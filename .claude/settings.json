@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(pitchmind:*)",
+      "Bash(python -m pitchmind.cli:*)",
+      "Bash(pip install -e .)",
+      "Bash(python -m venv:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(pytest:*)",
+      "Bash(uv:*)",
+      "Bash(duckdb:*)",
+      "Read",
+      "Grep",
+      "Glob"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.claude/settings.local.json)"
+    ]
+  },
+  "env": {
+    "PITCHMIND_DB": "data/pitchmind.duckdb",
+    "PITCHMIND_MODEL": "claude-opus-4-8"
+  }
+}
