@@ -120,6 +120,24 @@ def ask(
         typer.echo(json.dumps(result.trace, indent=2, default=str))
 
 
+# ------------------------------------------------------------------------- SERVE
+@app.command("serve")
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Bind host."),
+    port: int = typer.Option(8000, help="Bind port."),
+    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes."),
+) -> None:
+    """Run the FastAPI backend (requires the [api] extra)."""
+    try:
+        import uvicorn
+    except ImportError as exc:  # pragma: no cover
+        raise typer.BadParameter(
+            "API deps missing. Install with: pip install -e '.[api]'"
+        ) from exc
+
+    uvicorn.run("api.main:app", host=host, port=port, reload=reload)
+
+
 # -------------------------------------------------------------------------- EVAL
 @app.command("eval")
 def eval_cmd(
