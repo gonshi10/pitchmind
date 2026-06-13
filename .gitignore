@@ -17,6 +17,7 @@ data/raw/
 data/parquet/
 data/*.duckdb
 data/*.png
+data/traces/
 
 # Claude Code local overrides (secrets)
 .claude/settings.local.json

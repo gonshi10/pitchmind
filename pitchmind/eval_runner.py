@@ -45,6 +45,9 @@ def _allowed_numbers(rows: list[dict], question: str) -> set[str]:
     allowed |= set(_NUM_RE.findall(question))
     # ranks for a list of N rows
     allowed |= {str(i) for i in range(0, min(len(rows), 30) + 1)}
+    # the row count itself is given to the synthesis model (row_count) and is grounded —
+    # e.g. "Messi took 158 shots" when 158 rows were returned.
+    allowed.add(str(len(rows)))
     allowed |= _YEARLIKE
     return allowed
 

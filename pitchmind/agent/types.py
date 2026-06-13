@@ -40,4 +40,5 @@ class AgentResult:
     columns: list[str] = field(default_factory=list)
     viz_path: str | None = None
     ok: bool = True
+    run_id: str = ""
     trace: dict[str, Any] = field(default_factory=dict)
