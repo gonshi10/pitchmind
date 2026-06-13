@@ -68,10 +68,20 @@ def _sse(event: str, data: dict) -> str:
 
 @app.get("/health")
 def health() -> dict:
+    from pitchmind.etl import catalog
+
+    loaded = [
+        {
+            "label": t.label,
+            "competition_id": t.competition_id,
+            "season_id": t.season_id,
+        }
+        for t in catalog.loaded_targets()
+    ]
     return {
         "status": "ok",
         "db_present": config.DB_PATH.exists(),
-        "target": config.TARGET.label,
+        "loaded_targets": loaded,
     }
 
 

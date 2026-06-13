@@ -1,6 +1,6 @@
 """PitchMind command-line interface.
 
-    pitchmind etl download | flatten | load-duckdb | entity-index | marts | all
+    pitchmind etl catalog | list | add | all
     pitchmind ask "<question>" [--show-sql] [--show-trace]
     pitchmind eval [--limit N]
 
@@ -21,30 +21,118 @@ etl_app = typer.Typer(help="Offline data pipeline (StatsBomb -> DuckDB).")
 app.add_typer(etl_app, name="etl")
 
 
-# --------------------------------------------------------------------------- ETL
-@etl_app.command("download")
-def etl_download() -> None:
-    """Verify the target competition/season and cache the match list."""
-    from .etl import download
+def _resolve_add_target(
+    competition_id: int | None,
+    season_id: int | None,
+    name: str | None,
+) -> config.Target:
+    from .etl import catalog
 
-    matches = download.download_matches()
-    typer.echo(f"Verified {config.TARGET.label}. Cached {len(matches)} matches.")
+    if name:
+        return catalog.resolve_target(name)
+    if competition_id is not None and season_id is not None:
+        return catalog.get_target(competition_id, season_id)
+    return config.DEFAULT_TARGET
+
+
+# --------------------------------------------------------------------------- ETL
+@etl_app.command("catalog")
+def etl_catalog() -> None:
+    """Sync the full StatsBomb open-data catalog to data/raw/catalog.parquet."""
+    from .etl import catalog
+
+    n = catalog.sync_catalog()
+    typer.echo(f"Synced {n} competition/season targets to {config.CATALOG_PATH}")
+
+
+@etl_app.command("list")
+def etl_list() -> None:
+    """Show catalog targets and which are loaded locally."""
+    from .etl import catalog
+
+    if not config.CATALOG_PATH.exists():
+        typer.echo("No catalog cached. Run `pitchmind etl catalog` first.")
+        raise typer.Exit(code=1)
+
+    loaded_keys = {
+        (t.competition_id, t.season_id) for t in catalog.loaded_targets()
+    }
+    typer.echo(f"Catalog: {len(catalog.all_targets())} targets")
+    typer.echo(f"Loaded:  {len(loaded_keys)} targets\n")
+    for target in catalog.all_targets():
+        key = (target.competition_id, target.season_id)
+        mark = "loaded" if key in loaded_keys else "—"
+        stats = catalog.target_stats(target) if key in loaded_keys else {}
+        extra = ""
+        if stats.get("match_count"):
+            extra = f" ({stats['match_count']} matches"
+            if stats.get("event_count") is not None:
+                extra += f", {stats['event_count']} events"
+            extra += ")"
+        typer.echo(
+            f"  [{mark:6}] {target.label}  "
+            f"(competition_id={target.competition_id}, season_id={target.season_id})"
+            f"{extra}"
+        )
+
+
+@etl_app.command("add")
+def etl_add(
+    competition_id: int | None = typer.Option(
+        None, "--competition-id", help="StatsBomb competition_id."
+    ),
+    season_id: int | None = typer.Option(
+        None, "--season-id", help="StatsBomb season_id."
+    ),
+    name: str | None = typer.Option(
+        None, "--name", help="Fuzzy label, e.g. 'World Cup 2018'."
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-fetch and overwrite existing match parquet."
+    ),
+) -> None:
+    """Download, flatten, and load one competition/season."""
+    from .etl import pipeline
+
+    target = _resolve_add_target(competition_id, season_id, name)
+    typer.echo(f"Ingesting {target.label} ...")
+    result = pipeline.ingest_target(target, force=force)
+    typer.echo(
+        f"Done: {result['matches']} matches, "
+        f"{result['events_flattened']} events flattened."
+    )
+
+
+@etl_app.command("download")
+def etl_download(
+    competition_id: int | None = typer.Option(None, "--competition-id"),
+    season_id: int | None = typer.Option(None, "--season-id"),
+    name: str | None = typer.Option(None, "--name"),
+) -> None:
+    """Alias for ``etl add`` (backward compatible)."""
+    etl_add(
+        competition_id=competition_id,
+        season_id=season_id,
+        name=name,
+        force=False,
+    )
 
 
 @etl_app.command("flatten")
-def etl_flatten() -> None:
-    """Fetch each match's events and write curated parquet (one file per match)."""
-    from .etl import download, flatten
+def etl_flatten(
+    competition_id: int | None = typer.Option(None, "--competition-id"),
+    season_id: int | None = typer.Option(None, "--season-id"),
+    name: str | None = typer.Option(None, "--name"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Flatten cached matches for one target (run ``etl add`` or download first)."""
+    from .etl import flatten
 
-    match_ids = download.cached_match_ids()
-    total = len(match_ids)
-    written = 0
-    for i, match_id in enumerate(match_ids, start=1):
-        df = flatten.fetch_and_flatten_match(match_id)
-        flatten.write_match_parquet(df, match_id)
-        written += len(df)
-        typer.echo(f"  [{i}/{total}] match {match_id}: {len(df)} events")
-    typer.echo(f"Flattened {total} matches, {written} events -> {config.PARQUET_DIR}")
+    target = _resolve_add_target(competition_id, season_id, name)
+    match_count, event_count = flatten.flatten_target(target, force=force)
+    typer.echo(
+        f"Flattened {match_count} matches, {event_count} events for {target.label}"
+    )
 
 
 @etl_app.command("load-duckdb")
@@ -60,7 +148,7 @@ def etl_load_duckdb() -> None:
 
 @etl_app.command("entity-index")
 def etl_entity_index() -> None:
-    """Build players, teams, and aliases."""
+    """Build competitions, seasons, players, teams, and aliases."""
     from .etl import entity_index
 
     counts = entity_index.build()
@@ -81,13 +169,41 @@ def etl_marts() -> None:
 
 
 @etl_app.command("all")
-def etl_all() -> None:
-    """Run the whole ETL chain in order."""
-    etl_download()
-    etl_flatten()
-    etl_load_duckdb()
-    etl_entity_index()
-    etl_marts()
+def etl_all(
+    everything: bool = typer.Option(
+        False,
+        "--everything",
+        help="Download and ingest every catalog target (hours; large disk).",
+    ),
+    force: bool = typer.Option(False, "--force", help="Re-flatten existing matches."),
+) -> None:
+    """Rebuild derived tables, or ingest all catalog targets with --everything."""
+    from .etl import catalog, pipeline
+
+    if everything:
+        if not config.CATALOG_PATH.exists():
+            catalog.sync_catalog()
+        targets = catalog.all_targets()
+        typer.echo(f"Ingesting {len(targets)} catalog targets ...")
+        for i, target in enumerate(targets, start=1):
+            typer.echo(f"\n[{i}/{len(targets)}] {target.label}")
+            try:
+                result = pipeline.ingest_target(target, force=force)
+                typer.echo(
+                    f"  {result['matches']} matches, "
+                    f"{result['events_flattened']} events"
+                )
+            except Exception as exc:  # noqa: BLE001 — continue bulk ingest on failure
+                typer.secho(f"  FAILED: {exc}", fg=typer.colors.RED)
+        typer.echo("\nBulk ingest complete.")
+        return
+
+    result = pipeline.rebuild_derived()
+    typer.echo("Rebuilt from parquet:")
+    for stage, counts in result.items():
+        typer.echo(f"  {stage}:")
+        for rel, n in counts.items():
+            typer.echo(f"    {rel}: {n}")
 
 
 # --------------------------------------------------------------------------- ASK
@@ -104,7 +220,7 @@ def ask(
 
     try:
         result = run(question)
-    except RuntimeError as exc:  # e.g. missing ANTHROPIC_API_KEY
+    except RuntimeError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2)
 
@@ -142,13 +258,17 @@ def serve(
 @app.command("eval")
 def eval_cmd(
     limit: int = typer.Option(0, "--limit", help="Only run the first N gold items."),
+    breadth: bool = typer.Option(
+        False, "--breadth", help="Run gold_breadth.jsonl instead of gold_core.jsonl."
+    ),
 ) -> None:
     """Run the gold-set eval (the Phase 1 ship gate)."""
     from .eval_runner import run_eval
 
+    gold_file = "gold_breadth.jsonl" if breadth else "gold_core.jsonl"
     try:
-        ok = run_eval(limit=limit or None)
-    except RuntimeError as exc:  # e.g. missing ANTHROPIC_API_KEY
+        ok = run_eval(gold_file=gold_file, limit=limit or None)
+    except RuntimeError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2)
     raise typer.Exit(code=0 if ok else 1)

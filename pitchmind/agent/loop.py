@@ -1,13 +1,4 @@
-"""Orchestrate the full agent loop and assemble the trace.
-
-plan -> resolve -> retrieve(cached) -> generate SQL -> verify (one repair loop) ->
-execute (read-only, capped) -> viz -> synthesize. Every stage is recorded in the trace,
-which is both the debugger and the showcase artifact.
-
-An optional ``on_event(stage, data)`` callback surfaces each stage as it happens (used by the
-web app's live pipeline view). When it is None the loop behaves exactly as in Phase 1, so the
-CLI and ``pitchmind eval`` are unaffected.
-"""
+"""Orchestrate the full agent loop and assemble the trace."""
 
 from __future__ import annotations
 
@@ -17,7 +8,7 @@ import uuid
 from typing import Callable
 
 from .. import config, trace_store
-from . import planner, resolve, sql_gen, synthesis, verifier, viz
+from . import planner, resolve, scope, sql_gen, synthesis, verifier, viz
 from .executor import ExecutionError, execute
 from .types import AgentResult
 
@@ -38,6 +29,18 @@ def _entity_trace(plan) -> list[dict]:
     ]
 
 
+def _scope_trace(plan) -> dict | None:
+    if not plan.scope:
+        return None
+    return {
+        "competition_id": plan.scope.competition_id,
+        "season_id": plan.scope.season_id,
+        "label": plan.scope.label,
+        "confidence": plan.scope.confidence,
+        "note": plan.scope.note,
+    }
+
+
 def run(question: str, on_event: EventFn | None = None) -> AgentResult:
     t0 = time.time()
     run_id = uuid.uuid4().hex
@@ -54,29 +57,39 @@ def run(question: str, on_event: EventFn | None = None) -> AgentResult:
         trace_store.save(run_id, trace)
         return result
 
-    # 1-2. Plan + resolve entities.
     plan = planner.plan(question)
     emit("plan", {
         "question_type": plan.question_type,
         "metric": plan.metric,
+        "time_scope": plan.time_scope,
         "wants_viz": plan.wants_viz,
         "viz_type": plan.viz_type,
     })
+
+    scope_result = scope.resolve_scope(question, plan)
+    if scope_result.error:
+        emit("error", {"where": "scope", "message": scope_result.error})
+        return finish(AgentResult(answer=scope_result.error, ok=False))
+
+    plan.scope = scope_result.scope
+    emit("scope", _scope_trace(plan) or {})
+
     resolve.resolve(plan)
     trace["stages"]["plan"] = {
         "question_type": plan.question_type,
         "metric": plan.metric,
+        "time_scope": plan.time_scope,
+        "scope": _scope_trace(plan),
         "wants_viz": plan.wants_viz,
         "viz_type": plan.viz_type,
         "entities": _entity_trace(plan),
     }
     emit("entities", {"entities": _entity_trace(plan)})
 
-    # 3-6. Generate SQL and verify, with at most one repair (config.MAX_REPAIRS).
     attempts: list[dict] = []
     sql = sql_gen.generate(question, plan)
     emit("sql_generated", {"sql": sql, "attempt": 1})
-    result_v = verifier.verify(sql)
+    result_v = verifier.verify(sql, scope=plan.scope)
     attempts.append({"sql": sql, "errors": result_v.errors})
     emit("verify", {"ok": result_v.ok, "errors": result_v.errors})
 
@@ -86,7 +99,7 @@ def run(question: str, on_event: EventFn | None = None) -> AgentResult:
         emit("repair", {"attempt": repairs, "errors": result_v.errors})
         sql = sql_gen.generate(question, plan, repair=result_v.feedback())
         emit("sql_generated", {"sql": sql, "attempt": repairs + 1})
-        result_v = verifier.verify(sql)
+        result_v = verifier.verify(sql, scope=plan.scope)
         attempts.append({"sql": sql, "errors": result_v.errors})
         emit("verify", {"ok": result_v.ok, "errors": result_v.errors})
 
@@ -103,7 +116,6 @@ def run(question: str, on_event: EventFn | None = None) -> AgentResult:
             ok=False,
         ))
 
-    # 7. Execute (read-only, capped, timed).
     try:
         exec_result = execute(sql)
     except ExecutionError as exc:
@@ -122,14 +134,14 @@ def run(question: str, on_event: EventFn | None = None) -> AgentResult:
         "rows_preview": exec_result.rows[:10],
     })
 
-    # 8. Viz (shot map only in Phase 1).
     viz_title = plan.entities[0].resolved_name if plan.entities else ""
+    if plan.scope and plan.scope.label:
+        viz_title = f"{viz_title} — {plan.scope.label}".strip(" —")
     viz_path = viz.maybe_render(plan, exec_result, title=viz_title)
     if viz_path:
         trace["stages"]["viz"] = {"path": viz_path}
         emit("viz", {"path": viz_path, "filename": os.path.basename(viz_path)})
 
-    # 9. Synthesize over the actual rows.
     answer = synthesis.synthesize(question, plan, exec_result)
     trace["stages"]["synthesis"] = {"answer": answer}
     emit("synthesis", {"answer": answer})

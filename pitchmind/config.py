@@ -1,8 +1,8 @@
-"""Central configuration: paths, model, and the target competition/season.
+"""Central configuration: paths, model, and competition/season targets.
 
-Phase 1 is scoped to La Liga 2015/16 only (spec §8). StatsBomb open-data ids:
-competition_id=11 (La Liga), season_id=27 (2015/2016). These are verified at runtime
-against ``sb.competitions()`` during ``etl download`` rather than trusted blindly.
+StatsBomb open-data ids are verified at runtime against ``sb.competitions()`` during ETL
+rather than trusted blindly. Multiple competition/season pairs can be loaded; see
+``pitchmind etl catalog`` and ``pitchmind etl add``.
 """
 
 from __future__ import annotations
@@ -26,6 +26,9 @@ KNOWLEDGE_DIR = ROOT / "knowledge"
 EVAL_DIR = ROOT / "eval"
 
 DB_PATH = Path(os.environ.get("PITCHMIND_DB", str(DATA_DIR / "pitchmind.duckdb")))
+STATE_PATH = DATA_DIR / "etl_state.json"
+CATALOG_PATH = RAW_DIR / "catalog.parquet"
+MATCHES_PATH = RAW_DIR / "matches.parquet"
 
 # --- LLM ------------------------------------------------------------------------
 MODEL = os.environ.get("PITCHMIND_MODEL", "claude-opus-4-8")
@@ -39,7 +42,7 @@ SYNTHESIS_TOP_N = 30   # rows shown to the synthesis model (token discipline)
 
 @dataclass(frozen=True)
 class Target:
-    """The competition/season this build is scoped to."""
+    """A competition/season pair from the StatsBomb open-data catalog."""
 
     competition_id: int
     season_id: int
@@ -50,8 +53,13 @@ class Target:
     def label(self) -> str:
         return f"{self.competition_name} {self.season_name}"
 
+    @property
+    def season_key(self) -> str:
+        """Composite key for season-scoped aliases (competition_id:season_id)."""
+        return f"{self.competition_id}:{self.season_id}"
 
-# Phase 1 target. season_name uses StatsBomb's "2015/2016" formatting.
+
+# Default target for examples and backward-compatible CLI defaults.
 LA_LIGA_2015_16 = Target(
     competition_id=11,
     season_id=27,
@@ -59,8 +67,10 @@ LA_LIGA_2015_16 = Target(
     season_name="2015/2016",
 )
 
-# The single active target for Phase 1. Widening to more competitions is Phase 4.
-TARGET = LA_LIGA_2015_16
+DEFAULT_TARGET = LA_LIGA_2015_16
+
+# Backward compatibility alias.
+TARGET = DEFAULT_TARGET
 
 
 def ensure_dirs() -> None:

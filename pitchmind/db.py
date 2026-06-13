@@ -24,7 +24,8 @@ def connect(read_only: bool = True) -> duckdb.DuckDBPyConnection:
     if read_only and not config.DB_PATH.exists():
         raise FileNotFoundError(
             f"DuckDB file not found at {config.DB_PATH}. Run the ETL first: "
-            "`pitchmind etl download flatten load-duckdb entity-index marts`."
+            "`pitchmind etl add --name 'La Liga 2015/16'` (or `pitchmind etl catalog` "
+            "then `pitchmind etl add` for another target)."
         )
     config.ensure_dirs()
     return duckdb.connect(str(config.DB_PATH), read_only=read_only)
@@ -48,16 +49,17 @@ def _schema_map(con: duckdb.DuckDBPyConnection) -> dict[str, list[str]]:
 
 @lru_cache(maxsize=1)
 def schema_map() -> dict[str, list[str]]:
-    """Cached {table: [columns]} from a short-lived read-only connection.
-
-    Cached because the database is static between ETL runs; the verifier hits this
-    on every request.
-    """
+    """Cached {table: [columns]} from a short-lived read-only connection."""
     con = connect(read_only=True)
     try:
         return _schema_map(con)
     finally:
         con.close()
+
+
+def clear_schema_cache() -> None:
+    """Invalidate cached schema after ETL rebuilds."""
+    schema_map.cache_clear()
 
 
 def relations() -> set[str]:

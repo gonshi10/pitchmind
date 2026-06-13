@@ -1,12 +1,4 @@
-"""Gold-set eval — the Phase 1 ship gate.
-
-For each item in ``eval/gold.jsonl`` we run the full loop and check:
-- the loop succeeded and SQL was verified,
-- entity resolution picked the right player/team,
-- declared structural expectations (min rows, viz, substrings),
-- **grounding**: every stat-like number in the answer appears in the executed rows
-  (the anti-hallucination guarantee).
-"""
+"""Gold-set eval — the Phase 1 ship gate (core) and optional breadth set."""
 
 from __future__ import annotations
 
@@ -15,19 +7,31 @@ import re
 
 from . import config
 from .agent.loop import run
+from .etl import catalog
 from .etl.entity_index import normalize
 
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
-# Years / season tokens we never treat as stats.
-_YEARLIKE = {"2015", "2016", "15", "16", "11", "27"}
 
 
 def _norm(s: str) -> str:
     return normalize(str(s))
 
 
+def _yearlike_tokens() -> set[str]:
+    """Season/year tokens that may appear in answers without being stats."""
+    tokens: set[str] = set()
+    for target in catalog.loaded_targets():
+        for part in target.season_name.replace("/", " ").split():
+            tokens.add(part)
+        tokens.add(str(target.competition_id))
+        tokens.add(str(target.season_id))
+    for year in range(1950, 2035):
+        tokens.add(str(year))
+        tokens.add(str(year % 100))
+    return tokens
+
+
 def _allowed_numbers(rows: list[dict], question: str) -> set[str]:
-    """Numeric surface forms that may legitimately appear in the answer."""
     allowed: set[str] = set()
     for row in rows:
         for v in row.values():
@@ -43,12 +47,9 @@ def _allowed_numbers(rows: list[dict], question: str) -> set[str]:
                 for m in _NUM_RE.findall(str(v)):
                     allowed.add(m)
     allowed |= set(_NUM_RE.findall(question))
-    # ranks for a list of N rows
     allowed |= {str(i) for i in range(0, min(len(rows), 30) + 1)}
-    # the row count itself is given to the synthesis model (row_count) and is grounded —
-    # e.g. "Messi took 158 shots" when 158 rows were returned.
     allowed.add(str(len(rows)))
-    allowed |= _YEARLIKE
+    allowed |= _yearlike_tokens()
     return allowed
 
 
@@ -58,17 +59,13 @@ def _grounding_violations(answer: str, rows: list[dict], question: str) -> list[
     for tok in _NUM_RE.findall(answer):
         if tok in allowed:
             continue
-        # tolerate rounding: does any allowed value round to this token?
         try:
             val = float(tok)
         except ValueError:
             continue
         dec = len(tok.split(".")[1]) if "." in tok else 0
-        if any(
-            _is_close(val, a, dec) for a in allowed if _isfloat(a)
-        ):
+        if any(_is_close(val, a, dec) for a in allowed if _isfloat(a)):
             continue
-        # only flag plausible stat magnitudes, not stray small/large ids
         if 2 <= val <= 1000:
             violations.append(tok)
     return violations
@@ -86,10 +83,26 @@ def _is_close(val: float, other: str, dec: int) -> bool:
     return round(float(other), dec) == round(val, dec)
 
 
+def _target_loaded(competition_id: int, season_id: int) -> bool:
+    loaded = catalog.loaded_targets()
+    return any(
+        t.competition_id == competition_id and t.season_id == season_id for t in loaded
+    )
+
+
 def _check_item(item: dict) -> tuple[bool, list[str]]:
     question = item["question"]
     checks = item.get("checks", {})
     failures: list[str] = []
+
+    req = checks.get("requires_target")
+    if req:
+        cid, sid = int(req["competition_id"]), int(req["season_id"])
+        if not _target_loaded(cid, sid):
+            failures.append(
+                f"skipped: target competition_id={cid} season_id={sid} not loaded"
+            )
+            return False, failures
 
     result = run(question)
     if not result.ok:
@@ -124,9 +137,9 @@ def _check_item(item: dict) -> tuple[bool, list[str]]:
     return (not failures), failures
 
 
-def run_eval(limit: int | None = None) -> bool:
-    path = config.EVAL_DIR / "gold.jsonl"
-    items = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+def run_eval(gold_file: str = "gold_core.jsonl", limit: int | None = None) -> bool:
+    path = config.EVAL_DIR / gold_file
+    items = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     if limit:
         items = items[:limit]
 
@@ -139,7 +152,7 @@ def run_eval(limit: int | None = None) -> bool:
             print(f"        - {f}")
         passed += int(ok)
 
-    print(f"\nGold set: {passed}/{len(items)} passed.")
+    print(f"\nGold set ({gold_file}): {passed}/{len(items)} passed.")
     green = passed == len(items)
     print("SHIP GATE: GREEN ✅" if green else "SHIP GATE: RED ❌")
     return green

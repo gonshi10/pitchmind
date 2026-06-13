@@ -1,7 +1,10 @@
 # PitchMind schema (DuckDB)
 
-All data is **La Liga 2015/2016** (`competition_id = 11`, `season_id = 27`). Every query
-**must** filter on both, must be a read-only `SELECT`, and must include a `LIMIT`.
+Data spans multiple StatsBomb open-data competition/season pairs. Each loaded target is
+identified by `competition_id` and `season_id`. Every query **must** filter on both for a
+**loaded** target, must be a read-only `SELECT`, and must include a `LIMIT`.
+
+Use `competitions`, `seasons`, and `pitchmind etl list` to see what is loaded locally.
 
 Pitch convention (StatsBomb): coordinates are on a **120 × 80** pitch. The attacking
 direction is toward **x = 120** (the opponent goal), so a forward action *increases* `x`.
@@ -12,9 +15,17 @@ Prefer the **marts** (`mart_player_season`, `mart_shots`) for aggregate question
 pre-computed and carry the canonical metric definitions. Use the event views for anything the
 marts don't cover.
 
+## Catalog tables
+
+### `competitions` — one row per competition in the open-data catalog
+- `competition_id`, `competition_name`, `country_name`, `competition_gender`, `competition_international`
+
+### `seasons` — one row per competition/season in the catalog
+- `competition_id`, `season_id`, `season_name`, `label` (e.g. "La Liga 2015/2016")
+
 ## Marts (use these first)
 
-### `mart_player_season` — one row per player, season totals
+### `mart_player_season` — one row per player per competition/season
 - `player_id`, `player_name`, `team_name`, `team_id`, `competition_id`, `season_id`
 - `matches_played` — distinct matches the player appears in
 - `shots`, `goals`, `xg` — shot count, goals scored, total StatsBomb xG
@@ -28,7 +39,7 @@ marts don't cover.
 - `ball_progressions_under_pressure` — under-pressure sum of the two
 
 ### `mart_shots` — one row per shot (backs the shot-map viz)
-- `shot_id`, `match_id`, `player`, `player_id`, `team`, `team_id`
+- `shot_id`, `match_id`, `competition_id`, `season_id`, `player`, `player_id`, `team`, `team_id`
 - `x`, `y` — shot location on the 120 × 80 pitch
 - `xg` — StatsBomb expected-goals value
 - `shot_outcome` (e.g. 'Goal', 'Saved', 'Off T', 'Blocked'), `shot_type`, `shot_body_part`
@@ -55,9 +66,12 @@ Every view shares: `id`, `match_id`, `competition_id`, `season_id`, `period`, `m
 - **`v_ball_receipts`** — `ball_receipt_outcome`.
 
 ## Entity tables (for joins / disambiguation; resolution is done before SQL)
-- **`players`** — `player_id`, `player_name`, `team_name`, `team_id` (player's main team).
-- **`teams`** — `team_id`, `team_name`.
-- **`aliases`** — `kind` ('player'|'team'), `entity_id`, `name`, `alias`, `alias_norm`.
+
+- **`players`** — `player_id`, `competition_id`, `season_id`, `player_name`, `team_name`,
+  `team_id`, `events_n` (scoped per competition/season).
+- **`teams`** — `team_id`, `competition_id`, `season_id`, `team_name`, `events_n`.
+- **`aliases`** — `kind` ('player'|'team'|'competition'|'season'), `entity_id`, `name`,
+  `alias`, `alias_norm`, `competition_id`, `season_id` (nullable for global aliases).
 
 When the plan has already resolved an entity to an id, filter by that id
 (`player_id = ...`, `team_id = ...`) rather than matching on the name string.

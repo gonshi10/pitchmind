@@ -1,31 +1,21 @@
-"""Materialized metric marts.
-
-Pre-aggregated tables so most questions hit a mart instead of scanning raw events, and
-so fuzzy football metrics (progressive passes/carries, under-pressure progression) have a
-single, consistent definition shared with the glossary.
-
-Pitch convention (StatsBomb): 120 x 80, the attacking direction is toward x = 120, so a
-forward action increases ``location_x``. "Progressive" here = a completed action that
-advances the ball >= 10 units toward the opponent goal. "Final third" = x >= 80.
-"""
+"""Materialized metric marts."""
 
 from __future__ import annotations
 
 import duckdb
 
-from .. import config
-
-PROGRESSIVE_THRESHOLD = 10  # units of forward (toward-goal) advance
+PROGRESSIVE_THRESHOLD = 10
 
 
 def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
     """Create ``mart_shots`` and ``mart_player_season``."""
+    from .. import config
+
     own = con is None
     if con is None:
         con = duckdb.connect(str(config.DB_PATH), read_only=False)
 
     try:
-        # Per-shot table backing the shot-map viz.
         con.execute("DROP TABLE IF EXISTS mart_shots")
         con.execute(
             """
@@ -41,21 +31,21 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
             """
         )
 
-        # Per-player season aggregate.
         thr = PROGRESSIVE_THRESHOLD
         con.execute("DROP TABLE IF EXISTS mart_player_season")
         con.execute(
             f"""
             CREATE TABLE mart_player_season AS
             WITH shots AS (
-                SELECT player_id,
+                SELECT player_id, competition_id, season_id,
                        count(*) AS shots,
                        sum(CASE WHEN shot_outcome = 'Goal' THEN 1 ELSE 0 END) AS goals,
                        sum(shot_statsbomb_xg) AS xg
-                FROM v_shots GROUP BY player_id
+                FROM v_shots
+                GROUP BY player_id, competition_id, season_id
             ),
             passes AS (
-                SELECT player_id,
+                SELECT player_id, competition_id, season_id,
                        count(*) AS passes,
                        sum(CASE WHEN pass_outcome IS NULL THEN 1 ELSE 0 END)
                            AS passes_completed,
@@ -68,26 +58,41 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
                                 THEN 1 ELSE 0 END)
                            AS progressive_passes_under_pressure,
                        sum(CASE WHEN pass_goal_assist THEN 1 ELSE 0 END) AS assists
-                FROM v_passes GROUP BY player_id
+                FROM v_passes
+                GROUP BY player_id, competition_id, season_id
             ),
             carries AS (
-                SELECT player_id,
+                SELECT player_id, competition_id, season_id,
                        sum(CASE WHEN (carry_end_x - location_x) >= {thr}
                                 THEN 1 ELSE 0 END) AS progressive_carries,
                        sum(CASE WHEN (carry_end_x - location_x) >= {thr}
                                  AND under_pressure
                                 THEN 1 ELSE 0 END)
                            AS progressive_carries_under_pressure
-                FROM v_carries GROUP BY player_id
+                FROM v_carries
+                GROUP BY player_id, competition_id, season_id
             ),
             appearances AS (
-                SELECT player_id, count(DISTINCT match_id) AS matches_played
-                FROM events WHERE player_id IS NOT NULL GROUP BY player_id
+                SELECT player_id, competition_id, season_id,
+                       count(DISTINCT match_id) AS matches_played
+                FROM events
+                WHERE player_id IS NOT NULL
+                GROUP BY player_id, competition_id, season_id
+            ),
+            player_teams AS (
+                SELECT player_id, competition_id, season_id,
+                       player AS player_name, team AS team_name, team_id,
+                       row_number() OVER (
+                           PARTITION BY player_id, competition_id, season_id
+                           ORDER BY count(*) DESC
+                       ) AS rk
+                FROM events
+                WHERE player_id IS NOT NULL
+                GROUP BY player_id, competition_id, season_id, player, team, team_id
             )
             SELECT
-                p.player_id, p.player_name, p.team_name, p.team_id,
-                {config.TARGET.competition_id} AS competition_id,
-                {config.TARGET.season_id} AS season_id,
+                pt.player_id, pt.player_name, pt.team_name, pt.team_id,
+                pt.competition_id, pt.season_id,
                 a.matches_played,
                 COALESCE(s.shots, 0) AS shots,
                 COALESCE(s.goals, 0) AS goals,
@@ -106,11 +111,24 @@ def build(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
                 (COALESCE(ps.progressive_passes_under_pressure, 0)
                     + COALESCE(c.progressive_carries_under_pressure, 0))
                     AS ball_progressions_under_pressure
-            FROM players p
-            LEFT JOIN appearances a USING (player_id)
-            LEFT JOIN shots s USING (player_id)
-            LEFT JOIN passes ps USING (player_id)
-            LEFT JOIN carries c USING (player_id)
+            FROM player_teams pt
+            JOIN appearances a
+              ON pt.player_id = a.player_id
+             AND pt.competition_id = a.competition_id
+             AND pt.season_id = a.season_id
+            LEFT JOIN shots s
+              ON pt.player_id = s.player_id
+             AND pt.competition_id = s.competition_id
+             AND pt.season_id = s.season_id
+            LEFT JOIN passes ps
+              ON pt.player_id = ps.player_id
+             AND pt.competition_id = ps.competition_id
+             AND pt.season_id = ps.season_id
+            LEFT JOIN carries c
+              ON pt.player_id = c.player_id
+             AND pt.competition_id = c.competition_id
+             AND pt.season_id = c.season_id
+            WHERE pt.rk = 1
             """
         )
 

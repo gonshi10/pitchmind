@@ -1,8 +1,4 @@
-"""Load flattened parquet into DuckDB and create typed per-event-type views.
-
-The ``events`` table is the single source; views (``v_shots``, ``v_passes``, …) project
-the relevant columns per event type so generated SQL and schema docs stay readable.
-"""
+"""Load flattened parquet into DuckDB and create typed per-event-type views."""
 
 from __future__ import annotations
 
@@ -10,8 +6,6 @@ import duckdb
 
 from .. import config
 
-# View name -> (event type value, list of columns to expose).
-# Every view also carries the identity/context columns needed for filtering + joins.
 _BASE_COLS = [
     "id", "match_id", "competition_id", "season_id",
     "period", "minute", "second",
@@ -46,21 +40,40 @@ VIEWS: dict[str, tuple[str, list[str]]] = {
 }
 
 
-def load(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
-    """(Re)build the ``events`` table from parquet and create the typed views.
+def _parquet_sources() -> list[str]:
+    """Globs for hive-partitioned and legacy flat parquet layouts."""
+    sources: list[str] = []
+    partitioned = config.PARQUET_DIR / "competition_id=*" / "season_id=*" / "events_match_*.parquet"
+    if list(config.PARQUET_DIR.glob("competition_id=*")):
+        sources.append(str(partitioned))
+    legacy = config.PARQUET_DIR / "events_match_*.parquet"
+    if list(config.PARQUET_DIR.glob("events_match_*.parquet")):
+        sources.append(str(legacy))
+    return sources
 
-    Returns row counts per relation for reporting.
-    """
+
+def load(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
+    """(Re)build the ``events`` table from parquet and create the typed views."""
     own = con is None
     if con is None:
         config.ensure_dirs()
         con = duckdb.connect(str(config.DB_PATH), read_only=False)
 
     try:
-        glob = str(config.PARQUET_DIR / "events_match_*.parquet")
+        sources = _parquet_sources()
+        if not sources:
+            raise FileNotFoundError(
+                f"No parquet files under {config.PARQUET_DIR}. "
+                "Run `pitchmind etl add` first."
+            )
+
+        paths_sql = ", ".join(f"'{s}'" for s in sources)
         con.execute("DROP TABLE IF EXISTS events")
         con.execute(
-            f"CREATE TABLE events AS SELECT * FROM read_parquet('{glob}')"
+            f"""
+            CREATE TABLE events AS
+            SELECT * FROM read_parquet([{paths_sql}], hive_partitioning=true)
+            """
         )
 
         counts: dict[str, int] = {}
@@ -75,6 +88,9 @@ def load(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
             )
             counts[view] = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
 
+        from .. import db
+
+        db.clear_schema_cache()
         return counts
     finally:
         if own:

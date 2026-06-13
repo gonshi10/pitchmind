@@ -1,0 +1,10 @@
+{"question": "Who scored the most goals in La Liga 2015/16?", "checks": {"min_rows": 5, "answer_contains_any": ["Suárez", "Suarez"]}}
+{"question": "Which players progressed the ball most under pressure in La Liga 2015/16?", "checks": {"min_rows": 5}}
+{"question": "How many goals and assists did Lionel Messi get in La Liga 2015/16?", "checks": {"entities_resolved": ["Messi"], "answer_contains_any": ["Messi"], "min_rows": 1}}
+{"question": "Who took the most shots for Barcelona in La Liga 2015/16?", "checks": {"entities_resolved": ["Barcelona"], "min_rows": 3}}
+{"question": "Show me Lionel Messi's shot map for La Liga 2015/16", "checks": {"entities_resolved": ["Messi"], "expect_viz": true, "min_rows": 5}}
+{"question": "Which team generated the most expected goals in La Liga 2015/16?", "checks": {"min_rows": 2}}
+{"question": "Who had the most assists in La Liga 2015/16?", "checks": {"min_rows": 5}}
+{"question": "Which Real Madrid player took the most shots in La Liga 2015/16?", "checks": {"entities_resolved": ["Madrid"], "min_rows": 3}}
+{"question": "Top 5 players by expected goals in La Liga 2015/16", "checks": {"min_rows": 5}}
+{"question": "How many goals did Cristiano Ronaldo score in La Liga 2015/16?", "checks": {"entities_resolved": ["Ronaldo"], "answer_contains_any": ["Ronaldo"], "min_rows": 1}}

@@ -8,58 +8,88 @@ from rapidfuzz import process, fuzz
 
 from .. import db
 from ..etl.entity_index import normalize
-from .types import Entity, Plan
+from .types import Entity, Plan, Scope
 
-# Below this score we don't trust the match (rapidfuzz WRatio, 0-100).
 _MIN_SCORE = 70.0
-# Only entities essentially tied at the top score are broken by prominence (event count) —
-# so "Suárez" resolves to the prolific Luis Suárez, not a fringe namesake — while a unique
-# best match always wins outright.
 _TIE_MARGIN = 0.5
 
 
-@lru_cache(maxsize=2)
-def _alias_table(kind: str) -> tuple[tuple[str, int, str], ...]:
-    """(alias_norm, entity_id, canonical_name) rows for a kind ('player'|'team')."""
+@lru_cache(maxsize=16)
+def _alias_table(
+    kind: str,
+    competition_id: int | None,
+    season_id: int | None,
+) -> tuple[tuple[str, int, str], ...]:
+    """(alias_norm, entity_id, canonical_name) rows for a kind, optionally scoped."""
     con = db.connect(read_only=True)
     try:
-        rows = con.execute(
-            "SELECT alias_norm, entity_id, name FROM aliases WHERE kind = ?",
-            [kind],
-        ).fetchall()
+        if competition_id is not None and season_id is not None:
+            rows = con.execute(
+                """
+                SELECT alias_norm, entity_id, name FROM aliases
+                WHERE kind = ?
+                  AND (competition_id IS NULL
+                       OR (competition_id = ? AND season_id = ?))
+                """,
+                [kind, competition_id, season_id],
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT alias_norm, entity_id, name FROM aliases WHERE kind = ?",
+                [kind],
+            ).fetchall()
         return tuple((a, int(eid), n) for a, eid, n in rows)
     finally:
         con.close()
 
 
-@lru_cache(maxsize=2)
-def _prominence(kind: str) -> dict[int, int]:
-    """{entity_id: event_count} — used to break score ties toward the prominent entity."""
+@lru_cache(maxsize=16)
+def _prominence(
+    kind: str,
+    competition_id: int | None,
+    season_id: int | None,
+) -> dict[int, int]:
     con = db.connect(read_only=True)
     try:
-        table = "players" if kind == "player" else "teams"
-        id_col = "player_id" if kind == "player" else "team_id"
-        rows = con.execute(f"SELECT {id_col}, events_n FROM {table}").fetchall()
+        if kind == "player":
+            if competition_id is not None and season_id is not None:
+                rows = con.execute(
+                    """
+                    SELECT player_id, events_n FROM players
+                    WHERE competition_id = ? AND season_id = ?
+                    """,
+                    [competition_id, season_id],
+                ).fetchall()
+            else:
+                rows = con.execute(
+                    "SELECT player_id, events_n FROM players"
+                ).fetchall()
+            return {int(i): int(n) for i, n in rows}
+        if competition_id is not None and season_id is not None:
+            rows = con.execute(
+                """
+                SELECT team_id, events_n FROM teams
+                WHERE competition_id = ? AND season_id = ?
+                """,
+                [competition_id, season_id],
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT team_id, events_n FROM teams").fetchall()
         return {int(i): int(n) for i, n in rows}
     finally:
         con.close()
 
 
-def resolve_entity(entity: Entity) -> Entity:
-    """Attach entity_id / resolved_name / confidence (mutates and returns the entity).
-
-    Strategy: score every alias, keep the best score per entity, then among entities within
-    a small margin of the top score pick the most prominent (most events). This handles
-    shared surnames and short nicknames where pure fuzzy score ties.
-    """
-    table = _alias_table(entity.kind)
+def resolve_entity(entity: Entity, scope: Scope | None = None) -> Entity:
+    comp_id = scope.competition_id if scope else None
+    season_id = scope.season_id if scope else None
+    table = _alias_table(entity.kind, comp_id, season_id)
     if not table:
         entity.note = "entity index empty — run `pitchmind etl entity-index`"
         return entity
 
     query = normalize(entity.text)
     choices = [row[0] for row in table]
-    # All alias matches above a floor; aggregate to best score per entity.
     matches = process.extract(query, choices, scorer=fuzz.WRatio, limit=50)
     best_by_entity: dict[int, tuple[float, str]] = {}
     for _, score, idx in matches:
@@ -73,8 +103,7 @@ def resolve_entity(entity: Entity) -> Entity:
         return entity
 
     top_score = max(s for s, _ in best_by_entity.values())
-    prominence = _prominence(entity.kind)
-    # Among near-ties, prefer the most prominent entity.
+    prominence = _prominence(entity.kind, comp_id, season_id)
     contenders = [
         (eid, score, name)
         for eid, (score, name) in best_by_entity.items()
@@ -97,5 +126,5 @@ def resolve_entity(entity: Entity) -> Entity:
 def resolve(plan: Plan) -> Plan:
     """Resolve every entity in the plan in place."""
     for entity in plan.entities:
-        resolve_entity(entity)
+        resolve_entity(entity, plan.scope)
     return plan

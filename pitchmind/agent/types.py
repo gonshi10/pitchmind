@@ -7,6 +7,17 @@ from typing import Any
 
 
 @dataclass
+class Scope:
+    """Resolved competition/season for a question."""
+
+    competition_id: int
+    season_id: int
+    label: str
+    confidence: float | None = None
+    note: str | None = None
+
+
+@dataclass
 class Entity:
     """An entity extracted by the planner and (optionally) resolved to an id."""
 
@@ -25,7 +36,8 @@ class Plan:
     question_type: str
     metric: str
     entities: list[Entity] = field(default_factory=list)
-    time_scope: str = "La Liga 2015/2016"
+    time_scope: str = ""
+    scope: Scope | None = None
     wants_viz: bool = False
     viz_type: str | None = None
 

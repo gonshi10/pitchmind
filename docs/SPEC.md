@@ -202,13 +202,15 @@ pitchmind/
   expandable trace panel.
 - **Phase 3 — Depth.** More viz templates (pass map, heatmap, pass network, progression map),
   the critic subagent, semantic + result caching, prompt-cache pre-warming, more marts.
-- **Phase 4 — Breadth & rigor.** More competitions/seasons, conversational context, the eval
-  harness with a gold question set, observability dashboard.
+- **Phase 4 — Breadth & rigor (in progress).** Full StatsBomb open-data catalog support:
+  selective `etl add` per competition/season, scope resolution in the agent, tiered eval
+  (`gold_core.jsonl` / `gold_breadth.jsonl`). Conversational context and observability
+  dashboard remain future work.
 
 ## 9. Eval & quality
 
-- **Gold set** (`eval/gold.jsonl`): ~20–30 questions with hand-verified answers. Each phase
-  keeps the gold set green.
+- **Gold set** (`eval/gold_core.jsonl`, optional `eval/gold_breadth.jsonl`): hand-verified
+  questions per loaded competition scope. Core La Liga set is the ship gate.
 - **Checks:** numbers in the answer match executed rows; entity resolution picks the right
   player/team; generated SQL passes the verifier; no invented stats.
 - **Failure-driven exemplars:** every real failure that gets fixed becomes a new few-shot.

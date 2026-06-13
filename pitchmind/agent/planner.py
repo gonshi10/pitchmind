@@ -63,7 +63,7 @@ def plan(question: str) -> Plan:
         question_type=data["question_type"],
         metric=data["metric"],
         entities=[Entity(text=e["text"], kind=e["kind"]) for e in data["entities"]],
-        time_scope=data.get("time_scope", "La Liga 2015/2016"),
+        time_scope=data.get("time_scope", ""),
         wants_viz=bool(data.get("wants_viz", False)),
         viz_type=viz_type,
     )

@@ -1,0 +1,5 @@
+{"question": "Who scored the most goals in the 2018 World Cup?", "checks": {"min_rows": 3, "requires_target": {"competition_id": 43, "season_id": 3}}}
+{"question": "Which team generated the most expected goals in the Champions League 2015/16?", "checks": {"min_rows": 2, "requires_target": {"competition_id": 16, "season_id": 27}}}
+{"question": "How many goals did Harry Kane score in the 2018 World Cup?", "checks": {"entities_resolved": ["Kane"], "min_rows": 1, "requires_target": {"competition_id": 43, "season_id": 3}}}
+{"question": "Top 5 players by expected goals in the Women's World Cup 2019", "checks": {"min_rows": 5, "requires_target": {"competition_id": 72, "season_id": 30}}}
+{"question": "Who took the most shots for France in the 2018 World Cup?", "checks": {"entities_resolved": ["France"], "min_rows": 2, "requires_target": {"competition_id": 43, "season_id": 3}}}

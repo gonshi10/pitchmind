@@ -17,7 +17,6 @@ _SQL_SCHEMA = {
 
 
 def _plan_brief(plan: Plan) -> str:
-    """Render the resolved plan for the SQL prompt, surfacing resolved ids."""
     resolved = []
     for e in plan.entities:
         if e.entity_id is not None:
@@ -26,13 +25,19 @@ def _plan_brief(plan: Plan) -> str:
             )
         else:
             resolved.append(f"- {e.kind} '{e.text}' -> UNRESOLVED ({e.note})")
-    plan_obj = {
+    plan_obj: dict = {
         "question_type": plan.question_type,
         "metric": plan.metric,
         "time_scope": plan.time_scope,
         "wants_viz": plan.wants_viz,
         "viz_type": plan.viz_type,
     }
+    if plan.scope:
+        plan_obj["scope"] = {
+            "competition_id": plan.scope.competition_id,
+            "season_id": plan.scope.season_id,
+            "label": plan.scope.label,
+        }
     lines = ["plan: " + json.dumps(plan_obj)]
     if resolved:
         lines.append("Resolved entities (filter by these ids):")
@@ -41,7 +46,6 @@ def _plan_brief(plan: Plan) -> str:
 
 
 def generate(question: str, plan: Plan, repair: str | None = None) -> str:
-    """Return DuckDB SQL for the question + plan. ``repair`` carries verifier feedback."""
     user = f"Question: {question}\n{_plan_brief(plan)}"
     if repair:
         user += (
@@ -49,7 +53,7 @@ def generate(question: str, plan: Plan, repair: str | None = None) -> str:
             + repair
         )
     data = llm.complete(
-        retrieval.sql_gen_system(),
+        retrieval.sql_gen_system(plan.scope),
         user,
         max_tokens=1200,
         json_schema=_SQL_SCHEMA,
