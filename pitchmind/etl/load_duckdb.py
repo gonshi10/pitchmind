@@ -72,7 +72,7 @@ def load(con: duckdb.DuckDBPyConnection | None = None) -> dict[str, int]:
         con.execute(
             f"""
             CREATE TABLE events AS
-            SELECT * FROM read_parquet([{paths_sql}], hive_partitioning=true)
+            SELECT * FROM read_parquet([{paths_sql}], hive_partitioning=true, union_by_name=true)
             """
         )
 

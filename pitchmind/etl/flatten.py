@@ -136,7 +136,7 @@ def flatten_target(target: config.Target, force: bool = False) -> tuple[int, int
     """Flatten all cached matches for one target. Returns (matches_written, event_count)."""
     from . import download
 
-    matches = download.cached_matches(target.cometition_id, target.season_id)
+    matches = download.cached_matches(target.competition_id, target.season_id)
     total_matches = len(matches)
     event_count = 0
     for i, row in enumerate(matches.itertuples(index=False), start=1):
