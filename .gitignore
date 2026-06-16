@@ -26,3 +26,7 @@ data/traces/
 .DS_Store
 .idea/
 .vscode/
+
+# agent-arcade
+.claude/settings.local.json.bak
+# /agent-arcade
